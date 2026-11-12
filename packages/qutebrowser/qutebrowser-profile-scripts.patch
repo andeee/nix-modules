@@ -1,0 +1,47 @@
+From: qutebrowser issue #7662 (The-Compiler, 2023-04-24)
+Subject: Use profile-scoped QWebEngineScript collection
+
+Qt 6.5 changed WebEngineScript handling such that scripts injected on a
+per-page basis (page().scripts()) no longer reliably run on subframes,
+breaking hinting ("Unknown error while getting elements"). Moving the
+scripts to the profile-level collection (which is what the web engine
+shares across pages) restores hinting.
+
+Source: https://github.com/qutebrowser/qutebrowser/issues/7662#issuecomment-1520674002
+Applies to qutebrowser 3.7.0 (nixos-26.05).
+
+diff --git a/qutebrowser/browser/webengine/webenginetab.py b/qutebrowser/browser/webengine/webenginetab.py
+--- a/qutebrowser/browser/webengine/webenginetab.py
++++ b/qutebrowser/browser/webengine/webenginetab.py
+@@ -1072,11 +1072,11 @@
+         script.setWorldId(world)
+         script.setRunsOnSubFrames(subframes)
+         script.setName(f'_qute_{name}')
+-        self._widget.page().scripts().insert(script)
++        self._widget.page().profile().scripts().insert(script)
+ 
+     def _remove_js(self, name):
+         """Remove an early QWebEngineScript."""
+-        scripts = self._widget.page().scripts()
++        scripts = self._widget.page().profile().scripts()
+         if machinery.IS_QT6:
+             for script in scripts.find(f'_qute_{name}'):
+                 scripts.remove(script)
+@@ -1123,7 +1123,7 @@
+         self._inject_greasemonkey_scripts(scripts)
+ 
+     def _remove_all_greasemonkey_scripts(self):
+-        page_scripts = self._widget.page().scripts()
++        page_scripts = self._widget.page().profile().scripts()
+         for script in page_scripts.toList():
+             if script.name().startswith("GM-"):
+                 log.greasemonkey.debug('Removing script: {}'
+@@ -1145,7 +1145,7 @@
+         # make sure we replace existing scripts, not just add new ones.
+         # While, taking care not to remove any other scripts that might
+         # have been added elsewhere, like the one for stylesheets.
+-        page_scripts = self._widget.page().scripts()
++        page_scripts = self._widget.page().profile().scripts()
+         self._remove_all_greasemonkey_scripts()
+ 
+         seen_names = set()
