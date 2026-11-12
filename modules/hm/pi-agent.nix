@@ -84,18 +84,20 @@ _:
         };
       };
 
-      config = lib.mkIf cfg.enable {
-        home.file = {
-          "${cfg.configDir}/settings.json".source =
-            jsonFormat.generate "pi-agent-settings.json" (mkSettings cfg.configDir);
-          "${cfg.configDir}/mcp.json".source =
-            jsonFormat.generate "pi-agent-mcp.json" mcp;
-          "${cfg.configDir}/extensions/opencode-go-quota.ts".source = ./pi-agent/opencode-go-quota.ts;
-          "${cfg.configDir}/models.json".source = jsonFormat.generate "pi-agent-models.json" {
-            providers = lib.optionalAttrs (cfg.switchyardProvider != { })
-              {
-                switchyard = cfg.switchyardProvider;
-              } // cfg.providers;
+      config = {
+        config = lib.mkIf cfg.enable {
+          home.file = {
+            "${cfg.configDir}/settings.json".source =
+              jsonFormat.generate "pi-agent-settings.json" (mkSettings cfg.configDir);
+            "${cfg.configDir}/mcp.json".source =
+              jsonFormat.generate "pi-agent-mcp.json" mcp;
+            "${cfg.configDir}/extensions/opencode-go-quota.ts".source = ./pi-agent/opencode-go-quota.ts;
+            "${cfg.configDir}/models.json".source = jsonFormat.generate "pi-agent-models.json" {
+              providers = lib.optionalAttrs (cfg.switchyardProvider != { })
+                {
+                  switchyard = cfg.switchyardProvider;
+                } // cfg.providers;
+            };
           };
         };
       };

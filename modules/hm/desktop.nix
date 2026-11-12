@@ -32,82 +32,84 @@ in
       };
     };
 
-    programs.niri = {
-      settings = {
-        workspaces = {
-          "1" = { name = "terminal"; };
-          "2" = { name = "browser"; };
-        };
-        spawn-at-startup = [
-          { command = [ "qutebrowser" ]; }
-          { command = [ "foot" ]; }
-        ];
-        window-rules = [
-          {
-            matches = [
-              { at-startup = true; app-id = "^foot$"; }
-            ];
-            open-on-workspace = "terminal";
-            open-maximized = true;
-          }
-          {
-            matches = [
-              { at-startup = true; app-id = ''^org\.qutebrowser\.qutebrowser$''; }
-            ];
-            open-on-workspace = "browser";
-            open-maximized = true;
-          }
-        ];
-      };
-    };
-
-    programs = {
-      rbw = lib.mkIf config.custom.desktop.rbw.enable {
-        enable = true;
+    config = {
+      programs.niri = {
         settings = {
-          base_url = config.custom.desktop.rbw.baseUrl;
-          email = config.custom.desktop.rbw.email;
-          lock_timeout = 300;
-          pinentry = pkgs.pinentry-qt;
+          workspaces = {
+            "1" = { name = "terminal"; };
+            "2" = { name = "browser"; };
+          };
+          spawn-at-startup = [
+            { command = [ "qutebrowser" ]; }
+            { command = [ "foot" ]; }
+          ];
+          window-rules = [
+            {
+              matches = [
+                { at-startup = true; app-id = "^foot$"; }
+              ];
+              open-on-workspace = "terminal";
+              open-maximized = true;
+            }
+            {
+              matches = [
+                { at-startup = true; app-id = ''^org\.qutebrowser\.qutebrowser$''; }
+              ];
+              open-on-workspace = "browser";
+              open-maximized = true;
+            }
+          ];
         };
       };
 
-      gpg = lib.mkIf (config.custom.desktop.gpgPublicKeys != [ ]) {
-        enable = true;
-        publicKeys = config.custom.desktop.gpgPublicKeys;
+      programs = {
+        rbw = lib.mkIf config.custom.desktop.rbw.enable {
+          enable = true;
+          settings = {
+            base_url = config.custom.desktop.rbw.baseUrl;
+            email = config.custom.desktop.rbw.email;
+            lock_timeout = 300;
+            pinentry = pkgs.pinentry-qt;
+          };
+        };
+
+        gpg = lib.mkIf (config.custom.desktop.gpgPublicKeys != [ ]) {
+          enable = true;
+          publicKeys = config.custom.desktop.gpgPublicKeys;
+        };
       };
-    };
 
-    services = {
-      poweralertd.enable = true;
+      services = {
+        poweralertd.enable = true;
 
-      udiskie = {
-        tray = "always";
-        enable = true;
+        udiskie = {
+          tray = "always";
+          enable = true;
+        };
+
+        gpg-agent = {
+          enable = true;
+          enableZshIntegration = true;
+          pinentry.package = pkgs.pinentry-qt;
+        };
       };
 
-      gpg-agent = {
-        enable = true;
-        enableZshIntegration = true;
-        pinentry.package = pkgs.pinentry-qt;
+      systemd.user.services.udiskie = {
+        Unit = {
+          Requires = lib.mkForce [ ];
+          After = lib.mkForce [ "graphical-session-pre.target" ];
+        };
       };
-    };
 
-    systemd.user.services.udiskie = {
-      Unit = {
-        Requires = lib.mkForce [ ];
-        After = lib.mkForce [ "graphical-session-pre.target" ];
-      };
-    };
-
-    xdg = {
-      mimeApps = {
-        enable = true;
-        defaultApplications = {
-          "application/pdf" = "okularApplication_pdf.desktop";
-          "application/x-gzpdf" = "okularApplication_pdf.desktop";
-          "application/x-bzpdf" = "okularApplication_pdf.desktop";
-          "application/x-wwf" = "okularApplication_pdf.desktop";
+      xdg = {
+        mimeApps = {
+          enable = true;
+          defaultApplications = {
+            "application/pdf" = "okularApplication_pdf.desktop";
+            "application/x-gzpdf" = "okularApplication_pdf.desktop";
+            "application/x-bzpdf" = "okularApplication_pdf.desktop";
+            "application/x-wwf" = "okularApplication_pdf.desktop";
+          };
         };
       };
     };
