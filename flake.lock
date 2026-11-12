@@ -8,16 +8,16 @@
         ]
       },
       "locked": {
-        "lastModified": 1789053332,
-        "narHash": "sha256-Z6tV5jX8Ah6RHIHeSnV6kEwJJZ6Ore+FR8F+vr9xjxY=",
+        "lastModified": 1794152731,
+        "narHash": "sha256-utF7VJ+2Pnv0TjCBHxg9RJl+G6T7tX6L8MkAPo/JFZs=",
         "owner": "AvengeMedia",
         "repo": "dank-greeter",
-        "rev": "0175be5c2084e2c5027324403a329e04040cd0bc",
+        "rev": "c1e6a0352d56a4ef169edffedf04361d0b9d0550",
         "type": "github"
       },
       "original": {
         "owner": "AvengeMedia",
-        "ref": "v1.6.2",
+        "ref": "v2.1.2",
         "repo": "dank-greeter",
         "type": "github"
       }
@@ -25,16 +25,16 @@
     "dank-qml-common": {
       "flake": false,
       "locked": {
-        "lastModified": 1788376015,
-        "narHash": "sha256-/tT8rTznLADndTwLBzdgzzgfJH1ZhYQibYo5v/F8U+U=",
-        "owner": "AvengeMedia",
-        "repo": "dank-qml-common",
-        "rev": "26396ce432d6c71c3f5367438f96f4a8d667e160",
+        "lastModified": 1794151087,
+        "narHash": "sha256-U8tfltFSLjvb+FqbRbydohaMFUt1MiHJqBMrcWCr6t4=",
+        "owner": "duxlabs-dev",
+        "repo": "dux-qml-common",
+        "rev": "b78c6fc861bcf1955d3db0c016779886add1f207",
         "type": "github"
       },
       "original": {
-        "owner": "AvengeMedia",
-        "repo": "dank-qml-common",
+        "owner": "duxlabs-dev",
+        "repo": "dux-qml-common",
         "type": "github"
       }
     },
