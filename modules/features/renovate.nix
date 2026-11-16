@@ -1,17 +1,23 @@
 _:
 {
-  flake.modules.nixos.renovate-forgejo = { config, lib, pkgs, ... }:
+  flake.modules.nixos.renovate-self-hosted = { config, lib, pkgs, ... }:
     let
-      cfg = config.services.renovate-forgejo;
+      cfg = config.services.renovate-self-hosted;
     in
     {
-      options.services.renovate-forgejo = {
-        enable = lib.mkEnableOption "Renovate for Forgejo or Gitea";
+      options.services.renovate-self-hosted = {
+        enable = lib.mkEnableOption "Renovate for a self-hosted Gitea or Forgejo server";
 
         endpoint = lib.mkOption {
           type = lib.types.str;
           default = "";
-          description = "Forgejo or Gitea base URL, without a trailing slash.";
+          description = "Gitea or Forgejo base URL, without a trailing slash.";
+        };
+
+        platform = lib.mkOption {
+          type = lib.types.enum [ "gitea" "forgejo" ];
+          default = "gitea";
+          description = "The Renovate platform type used by the server.";
         };
 
         repositories = lib.mkOption {
@@ -43,11 +49,11 @@ _:
         assertions = [
           {
             assertion = cfg.endpoint != "" && !(lib.hasSuffix "/" cfg.endpoint);
-            message = "services.renovate-forgejo.endpoint must be set and must not end with a slash.";
+            message = "services.renovate-self-hosted.endpoint must be set and must not end with a slash.";
           }
           {
             assertion = cfg.repositories != [ ];
-            message = "services.renovate-forgejo.repositories must contain at least one repository.";
+            message = "services.renovate-self-hosted.repositories must contain at least one repository.";
           }
           {
             assertion = config.services.renovate.credentials ? RENOVATE_TOKEN;
@@ -60,7 +66,7 @@ _:
           inherit (cfg) schedule;
           runtimePackages = [ pkgs.nix pkgs.openssh pkgs.cacert ];
           settings = {
-            platform = "forgejo";
+            inherit (cfg) platform;
             autodiscover = false;
           } // {
             inherit (cfg) endpoint repositories;
@@ -75,10 +81,11 @@ _:
           };
         };
 
-        # Forgejo may accept the token embedded in Renovate's clone URL for the
-        # initial request but reject git's subsequent upload-pack request. The
-        # native NixOS service loads credentials into systemd's credential store;
-        # use that credential to configure git without exposing it in the store.
+        # Gitea or Forgejo may accept the token embedded in Renovate's clone
+        # URL for the initial request but reject git's subsequent upload-pack
+        # request. The native NixOS service loads credentials into systemd's
+        # credential store; use that credential to configure git without
+        # exposing it in the store.
         systemd.services.renovate.preStart = ''
           set -euo pipefail
           token="$(systemd-creds cat SECRET-RENOVATE_TOKEN)"
