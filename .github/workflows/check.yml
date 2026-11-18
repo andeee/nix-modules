@@ -1,0 +1,56 @@
+name: flake check
+
+# The library is consumed by two repos through a GitHub pin, so a break here is
+# only discovered on their next `nix flake update nix-modules` — after the fact
+# and in someone else's CI. `dependabot.yml` also bumps flake.lock weekly with
+# no gate, so unattended changes land on main unless this runs.
+#
+# Scope is deliberately narrow: `nix flake check` evaluates every module and
+# runs checks/*. It cannot see the consumer side (host composition, secrets,
+# deployment) — that stays with the consumers' own CI.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write      # cache-nix-action saves/restores the store via the Actions cache
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Nothing to configure: this flake has no nixConfig, so the runners never
+      # chase the fleet's LAN attic cache (that substituter lives in the
+      # consumer flakes only).
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Store cache only; the checks are eval-time plus a handful of tiny
+      # derivations, so a cold run is a few minutes.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 2G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-last-accessed: P7D
+          purge-primary-key: never
+
+      # x86_64-only by construction: aarch64 checks are reported as
+      # "incompatible systems" and skipped, which is fine because none of them
+      # need an aarch64 builder. Pass --all-systems only when one exists.
+      - name: nix flake check
+        run: nix flake check --print-build-logs
