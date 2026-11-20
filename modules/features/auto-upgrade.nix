@@ -273,8 +273,21 @@ _:
 
                 host = lib.mkOption {
                   type = lib.types.str;
-                  example = "forge.example";
-                  description = "Host alias the key is offered to.";
+                  example = "git-fetch-alias";
+                  description = ''
+                    Host pattern the key is offered to — and it should be a *private
+                    alias*, not the forge's real hostname.
+
+                    `programs.ssh.extraConfig` (which this module uses for the
+                    `Host` block) is system-wide: a block naming the real hostname
+                    with `IdentitiesOnly` takes every user's ssh session to that
+                    host away from their own keys and offers them this one instead.
+                    For a root-only, read-only deploy key that means their `git
+                    push` fails, which is exactly what happened the first time this
+                    was deployed. Give the alias a `HostName` (the consumer's
+                    `programs.ssh.extraConfig`, or an ssh `HostName` option here)
+                    pointing at the forge, and set `repoUrl` to the alias.
+                  '';
                 };
 
                 hostPublicKey = lib.mkOption {
