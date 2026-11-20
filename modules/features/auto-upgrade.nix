@@ -534,8 +534,12 @@ _:
               # Resolve the branch without evaluating anything: one ls-remote, so
               # the logged revision is exactly what this run decided on even if the
               # ref moves during the upgrade itself.
-              ${git} ls-remote ${sshUrl} "refs/heads/${cfg.ref}" > "$state/lsremote.out" 2> "$state/lsremote.err"
-              status=$?
+              # `git` exits 128 on every transport or authentication failure, and
+              # NixOS wraps this script in `set -e`: without the `|| status=$?` the
+              # shell aborts right here and the classification below never runs, so
+              # every cause would look the same (or produce no line at all).
+              status=0
+              ${git} ls-remote ${sshUrl} "refs/heads/${cfg.ref}" > "$state/lsremote.out" 2> "$state/lsremote.err" || status=$?
               rev="$(${head} -n 1 "$state/lsremote.out" | ${cut} -f1)"
 
               if [ "$status" -ne 0 ] || [ -z "$rev" ]; then
