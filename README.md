@@ -60,8 +60,11 @@ What the consumer has to provide, and why:
   through (lanzaboote or systemd-boot) and `nix.gc` prunes generations, so a
   daily cadence cannot fill the ESP.
 - **`protectInteractiveSession`** — keeps `greetd` from being restarted by an
-  activation, because `switch-to-configuration` has no display-manager exception
-  and a greeter restart takes the session with it.
+  activation: `switch-to-configuration` has no display-manager exception, and a
+  greeter restart takes the session hanging off it with it. Current nixpkgs already
+  sets this on its own greetd unit, so the option is a guarantee from *this* module
+  rather than from another module's implementation — plus coverage for a host
+  whose greeter is not nixpkgs'.
 
 The unit reports exactly one line per run (`activated:`, `skipped: … <reason>`,
 `failed: …`, `reboot required (…)`), reads its run state from

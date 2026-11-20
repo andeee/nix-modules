@@ -213,8 +213,10 @@
           "ssh_config overrides StrictHostKeyChecking: host key verification must stay on"
         ++ lib.optional (!(lib.hasInfix "forge.invalid " sshKnownHosts))
           "the pinned host key is not in /etc/ssh/ssh_known_hosts"
-        ++ lib.optional markerCfg.systemd.services.greetd.restartIfChanged
-          "an activation can restart greetd and kill the session under it"
+        # nixpkgs sets this on its greetd unit already; the assertion is that the
+        # *module* guarantees it, so the property survives a change upstream.
+        ++ lib.optional (markerCfg.systemd.services.greetd.restartIfChanged or true)
+          "an activation could restart greetd and kill the session under it"
         ++ lib.optional (pendingCfg.systemd.services ? greetd)
           "a host without a greeter gets a greetd unit definition anyway"
         ++ lib.optional (lib.toList rebootTimer.OnCalendar != [ "Sat *-*-* 02:55:00" ])

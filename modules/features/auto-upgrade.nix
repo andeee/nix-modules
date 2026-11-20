@@ -360,12 +360,21 @@ _:
             Keep an unattended activation from restarting the graphical greeter.
 
             `switch-to-configuration` restarts any unit whose content changed, and
-            it has no exception for display managers; a greeter restart takes the
-            session hanging off it down with it. Losing a work session is a worse
-            failure than a greeter change waiting for the next login. Network and
-            audio services are deliberately *not* protected: their restarts are
-            survivable, and a machine that never restarts infrastructure silently
-            runs stale configuration for months.
+            a greeter restart takes the session hanging off it down with it —
+            losing a work session is a worse failure than a greeter change waiting
+            for the next login.
+
+            Current nixpkgs already sets `restartIfChanged = false` on its greetd
+            unit, so on a stock greeter this option changes nothing (verified
+            2026-11-20: a laptop activation that replaced the entire greetd unit
+            left the session running, `NRestarts = 0`). It stays because the
+            guarantee should come from *this* module — an unattended activation
+            must not depend on another module's implementation detail — and because
+            it covers a host whose greeter is not nixpkgs' own.
+
+            Network and audio services are deliberately *not* protected: their
+            restarts are survivable, and a machine that never restarts
+            infrastructure silently runs stale configuration for months.
           '';
         };
 
