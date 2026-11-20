@@ -146,6 +146,15 @@
         while read -r line; do echo "wall: $line" >> "$NOTIFY_LOG"; done
       '';
 
+      # A `git` that fails the way a forge does: exit 128 with a message on stderr.
+      # The preflight must survive this (NixOS runs it under `set -e`) and classify
+      # the message — the bug this stub exists for is a bare `git ls-remote` that
+      # aborts the script before the classification can run.
+      stubGit = pkgs.writeShellScriptBin "git" ''
+        echo "''${GIT_STUB_MESSAGE:-fatal: could not read from remote repository}" >&2
+        exit 128
+      '';
+
       stubSystemctl = pkgs.writeShellScriptBin "systemctl" ''
         if [ "''${1:-}" = is-active ]; then exit 1; fi
         echo "systemctl $*" >> "$REBOOT_LOG"
@@ -169,6 +178,8 @@
           "the scp-like URL was not derived from repoUrl (git rejects git+ssh://)"
         ++ lib.optional (!(lib.hasInfix "nixos-upgrade-classify" preflight))
           "ref-resolution failures are not classified"
+        ++ lib.optional (!(lib.hasInfix "|| status=$?" preflight))
+          "the git call is not failure-tolerant: `set -e` would abort the preflight before the classification runs"
         ++ lib.optional (!(lib.hasInfix "refs/heads/main" preflight)) "the configured ref is not resolved"
         ++ lib.optional (!(lib.hasInfix "rev=$rev marker does not list synthetic" preflight))
           "the marker gate does not require the marker to cover this host"
@@ -253,6 +264,7 @@
             runuserStub = lib.getExe' stubRunuser "runuser";
             wallStub = lib.getExe' stubWall "wall";
             systemctlStub = lib.getExe' stubSystemctl "systemctl";
+            gitStub = lib.getExe' stubGit "git";
             passAsFile = [
               "preflight"
               "activation"
@@ -342,6 +354,43 @@
               test "$("$classify" 'Network is unreachable')" = transient ||
                 fail "an unreachable network is not transient"
               test "$("$classify" "")" = transient || fail "an unknown message is not transient"
+
+              # ---- preflight against a forge that refuses ----------------------
+              # `set -e` first, exactly as NixOS wraps a `preStart`: without it the
+              # test cannot see the failure mode it is here for (a bare `git
+              # ls-remote` aborting the script before the classification runs).
+              {
+                echo "set -e"
+                sed -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
+                    -e "s#/var/lib/ci/ci.lock#$PWD/work/ci.lock#g" \
+                    -e "s#/nix/store/[^ ]*-git-minimal[^/]*/bin/git#$gitStub#g" \
+                    "$preflightPath"
+              } > work/preflight.sh
+              chmod +x work/preflight.sh
+              grep -q "$gitStub" work/preflight.sh || fail "the git stub was not substituted"
+
+              reset_state() { rm -f work/state/skip work/state/failed work/state/rev; : > work/ci.lock; }
+
+              # A network that is not there: skip, and the unit stays successful.
+              reset_state
+              export GIT_STUB_MESSAGE='ssh: Could not resolve hostname forge.invalid: Name or service not known'
+              if ! pout=$(./work/preflight.sh 2>&1); then
+                fail "a transient resolution failure failed the unit instead of skipping: $pout"
+              fi
+              test -e work/state/skip || fail "a transient resolution failure did not write the skip marker"
+              printf '%s\n' "$pout" | grep -q "skipped: cannot resolve refs/heads/main" ||
+                fail "a transient resolution failure was not reported as a skip: $pout"
+
+              # A rejected key: fail, so a rotated deploy key is visible.
+              reset_state
+              export GIT_STUB_MESSAGE='git@forge.invalid: Permission denied (publickey).'
+              if pout=$(./work/preflight.sh 2>&1); then
+                fail "rejected credentials were not fatal: $pout"
+              fi
+              test -e work/state/failed || fail "rejected credentials did not write the failed marker"
+              printf '%s\n' "$pout" | grep -q "failed: rev=unknown cannot resolve refs/heads/main" ||
+                fail "rejected credentials were not reported as a failure: $pout"
+              unset GIT_STUB_MESSAGE
 
               # ---- notice -------------------------------------------------------
               # Point the notifier's absolute tool paths at the stubs, and its
