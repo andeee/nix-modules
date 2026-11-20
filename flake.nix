@@ -16,7 +16,7 @@
     };
     niri.url = "github:sodiboo/niri-flake";
     dank-greeter = {
-      url = "github:AvengeMedia/dank-greeter/v1.6.2";
+      url = "github:AvengeMedia/dank-greeter/v2.1.2";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     nixvim = {
