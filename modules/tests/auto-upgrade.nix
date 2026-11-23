@@ -37,7 +37,7 @@
               networking.hostName = "synthetic";
               autoUpgrade = {
                 enable = true;
-                repoUrl = "git+ssh://git@forge.invalid/example/repo";
+                repoUrl = "git+ssh://git@forge-alias/example/repo";
                 builtMarkerPath = "/var/lib/ci/last-built-rev";
               };
             }
@@ -59,7 +59,9 @@
           notify.leadSeconds = 120;
           fetch = {
             identityFile = "/run/secrets/fetch-ssh-key";
-            host = "forge.invalid";
+            # alias + real host, the shape that exposed the pin-auditing bug
+            host = "forge-alias";
+            hostName = "forge.invalid";
             hostPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEYONLY";
           };
           reboot = {
@@ -151,7 +153,7 @@
       # the message — the bug this stub exists for is a bare `git ls-remote` that
       # aborts the script before the classification can run.
       stubGit = pkgs.writeShellScriptBin "git" ''
-        echo "''${GIT_STUB_MESSAGE:-fatal: could not read from remote repository}" >&2
+        printf '%s\n' "''${GIT_STUB_MESSAGE:-fatal: could not read from remote repository}" >&2
         exit 128
       '';
 
@@ -161,7 +163,7 @@
       '';
 
       failures =
-        lib.optional (upgradeUnit.flake != "git+ssh://git@forge.invalid/example/repo?ref=main")
+        lib.optional (upgradeUnit.flake != "git+ssh://git@forge-alias/example/repo?ref=main")
           "the unit does not follow the configured ref (flake = ${upgradeUnit.flake})"
         ++ lib.optional (upgradeUnit.operation != "switch") "operation must be \"switch\""
         ++ lib.optional upgradeUnit.allowReboot "allowReboot must stay false: the activation never reboots"
@@ -174,7 +176,7 @@
           "the lock timeout does not skip the window"
         ++ lib.optional (lib.hasInfix "flock" substPreflight || lib.hasInfix "flock" substActivation)
           "a host without exclusiveLock still waits on a lock"
-        ++ lib.optional (!(lib.hasInfix "ls-remote git@forge.invalid:example/repo" preflight))
+        ++ lib.optional (!(lib.hasInfix "ls-remote git@forge-alias:example/repo" preflight))
           "the scp-like URL was not derived from repoUrl (git rejects git+ssh://)"
         ++ lib.optional (!(lib.hasInfix "nixos-upgrade-classify" preflight))
           "ref-resolution failures are not classified"
@@ -203,16 +205,25 @@
           "a host with notify disabled still notifies"
         ++ lib.optional (!(lib.hasInfix "nixos-upgrade-outcome" unit.serviceConfig.ExecStopPost))
           "ExecStopPost does not point at the outcome script"
-        ++ lib.optional (!(lib.hasInfix "Host forge.invalid" sshConfig))
-          "no Host block for the fetch host in the rendered ssh_config"
+        ++ lib.optional (!(lib.hasInfix "Host forge-alias" sshConfig))
+          "no Host block for the fetch alias in the rendered ssh_config"
+        ++ lib.optional (!(lib.hasInfix "HostName forge.invalid" sshConfig))
+          "the alias does not get a HostName, so ssh cannot resolve it"
         ++ lib.optional (!(lib.hasInfix "IdentityFile /run/secrets/fetch-ssh-key" sshConfig))
           "the fetch credential is not the IdentityFile"
         ++ lib.optional (!(lib.hasInfix "IdentitiesOnly yes" sshConfig))
           "IdentitiesOnly is missing: root's other keys could be offered"
         ++ lib.optional (lib.hasInfix "StrictHostKeyChecking" sshConfig)
           "ssh_config overrides StrictHostKeyChecking: host key verification must stay on"
-        ++ lib.optional (!(lib.hasInfix "forge.invalid " sshKnownHosts))
-          "the pinned host key is not in /etc/ssh/ssh_known_hosts"
+        # Both names: ssh validates the key under the post-HostName name, so a pin
+        # under the alias alone is a "Host key verification failed" waiting to happen.
+        ++ lib.optional (!(lib.hasInfix "forge-alias,forge.invalid " sshKnownHosts))
+          "the pinned host key does not cover both the alias and the real hostname"
+        # The classifier must see the whole message: git's verdict is in the first
+        # line and the last line is advice, so a tail-based reason shrugs at it.
+        ++ lib.optional (lib.hasInfix "tail -n 1 \"$state/lsremote.err\"" preflight)
+          "the ref failure reason is taken from the last stderr line, which is advice rather than the verdict"
+
         # nixpkgs sets this on its greetd unit already; the assertion is that the
         # *module* guarantees it, so the property survives a change upstream.
         ++ lib.optional (markerCfg.systemd.services.greetd.restartIfChanged or true)
@@ -286,214 +297,230 @@
               exit 1
             ''
             + ''
-              set -euo pipefail
+                            set -euo pipefail
 
-              fail() { echo "FAIL: $*" >&2; exit 1; }
+                            fail() { echo "FAIL: $*" >&2; exit 1; }
 
-              mkdir -p work
-              busy=$(mktemp -d)
-              export SESSIONS=$busy/sessions NOTIFY_LOG=$busy/log REBOOT_LOG=$busy/reboot.log
-              : > "$NOTIFY_LOG"
-              : > "$REBOOT_LOG"
+                            mkdir -p work
+                            busy=$(mktemp -d)
+                            export SESSIONS=$busy/sessions NOTIFY_LOG=$busy/log REBOOT_LOG=$busy/reboot.log
+                            : > "$NOTIFY_LOG"
+                            : > "$REBOOT_LOG"
 
-              # ---- outcome line -------------------------------------------------
-              cat "$ExecStopPost" > work/outcome.sh
-              sed -i -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
-                     -e "s#/run/booted-system#$PWD/work/booted#g" \
-                     -e "s#/run/current-system#$PWD/work/current#g" \
-                     work/outcome.sh
-              chmod +x work/outcome.sh
-              mkdir -p work/state work/gen-a work/gen-b
-              for part in kernel initrd; do
-                echo a > "work/gen-a/$part"
-                echo b > "work/gen-b/$part"
-              done
-              ln -s gen-a work/booted
-              ln -s gen-a work/current
-              echo deadbeefcafe > work/state/rev
+                            # ---- outcome line -------------------------------------------------
+                            cat "$ExecStopPost" > work/outcome.sh
+                            sed -i -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
+                                   -e "s#/run/booted-system#$PWD/work/booted#g" \
+                                   -e "s#/run/current-system#$PWD/work/current#g" \
+                                   work/outcome.sh
+                            chmod +x work/outcome.sh
+                            mkdir -p work/state work/gen-a work/gen-b
+                            for part in kernel initrd; do
+                              echo a > "work/gen-a/$part"
+                              echo b > "work/gen-b/$part"
+                            done
+                            ln -s gen-a work/booted
+                            ln -s gen-a work/current
+                            echo deadbeefcafe > work/state/rev
 
-              expect_line() {
-                desc=$1; want=$2; shift 2
-                got=$(env "$@" ./work/outcome.sh 2>&1)
-                printf '%s\n' "$got" | grep -qx "$want" ||
-                  fail "$desc: wanted '$want', got: $got"
-              }
+                            expect_line() {
+                              desc=$1; want=$2; shift 2
+                              got=$(env "$@" ./work/outcome.sh 2>&1)
+                              printf '%s\n' "$got" | grep -qx "$want" ||
+                                fail "$desc: wanted '$want', got: $got"
+                            }
 
-              expect_line "success" "nixos-upgrade: activated: rev=deadbeefcafe" EXIT_STATUS=0
-              test ! -e work/state/reboot-pending || fail "reboot-pending written without a kernel change"
+                            expect_line "success" "nixos-upgrade: activated: rev=deadbeefcafe" EXIT_STATUS=0
+                            test ! -e work/state/reboot-pending || fail "reboot-pending written without a kernel change"
 
-              rm work/current && ln -s gen-b work/current
-              expect_line "kernel debt" "nixos-upgrade: reboot required (kernel,initrd changed)" EXIT_STATUS=0
-              test -e work/state/reboot-pending || fail "no reboot-pending after a kernel change"
+                            rm work/current && ln -s gen-b work/current
+                            expect_line "kernel debt" "nixos-upgrade: reboot required (kernel,initrd changed)" EXIT_STATUS=0
+                            test -e work/state/reboot-pending || fail "no reboot-pending after a kernel change"
 
-              rm -f work/state/reboot-pending
-              expect_line "failed activation" "nixos-upgrade: failed: rev=deadbeefcafe activation exited 1" EXIT_STATUS=1
-              test ! -e work/state/reboot-pending || fail "reboot-pending written by a failed run"
+                            rm -f work/state/reboot-pending
+                            expect_line "failed activation" "nixos-upgrade: failed: rev=deadbeefcafe activation exited 1" EXIT_STATUS=1
+                            test ! -e work/state/reboot-pending || fail "reboot-pending written by a failed run"
 
-              rm work/current && ln -s gen-a work/current
-              expect_line "clean again" "nixos-upgrade: activated: rev=deadbeefcafe" EXIT_STATUS=0
-              test ! -e work/state/reboot-pending || fail "stale reboot-pending survived a clean activation"
+                            rm work/current && ln -s gen-a work/current
+                            expect_line "clean again" "nixos-upgrade: activated: rev=deadbeefcafe" EXIT_STATUS=0
+                            test ! -e work/state/reboot-pending || fail "stale reboot-pending survived a clean activation"
 
-              touch work/state/skip
-              test -z "$(env EXIT_STATUS=0 ./work/outcome.sh 2>&1)" || fail "a skipped window also logged an outcome line"
-              rm work/state/skip
+                            touch work/state/skip
+                            test -z "$(env EXIT_STATUS=0 ./work/outcome.sh 2>&1)" || fail "a skipped window also logged an outcome line"
+                            rm work/state/skip
 
-              # ---- ref-error classification -------------------------------------
-              classify=$(command -v nixos-upgrade-classify) || fail "the classify helper is not on PATH"
-              grep -q "nixos-upgrade-classify" "$preflightPath" ||
-                fail "the preflight does not call the classify helper"
+                            # ---- ref-error classification -------------------------------------
+                            classify=$(command -v nixos-upgrade-classify) || fail "the classify helper is not on PATH"
+                            grep -q "nixos-upgrade-classify" "$preflightPath" ||
+                              fail "the preflight does not call the classify helper"
 
-              test "$("$classify" 'git@forge: Permission denied (publickey).')" = fatal ||
-                fail "ssh authentication failure is not fatal"
-              test "$("$classify" 'Host key verification failed.')" = fatal ||
-                fail "host key failure is not fatal"
-              test "$("$classify" 'remote: Repository not found.')" = fatal ||
-                fail "a missing repository is not fatal"
-              test "$("$classify" 'ssh: Could not resolve hostname forge: Name or service not known')" = transient ||
-                fail "a DNS failure is not transient"
-              test "$("$classify" 'ssh: connect to host forge port 22: Connection timed out')" = transient ||
-                fail "a timeout is not transient"
-              test "$("$classify" 'Network is unreachable')" = transient ||
-                fail "an unreachable network is not transient"
-              test "$("$classify" "")" = transient || fail "an unknown message is not transient"
+                            test "$("$classify" 'git@forge: Permission denied (publickey).')" = fatal ||
+                              fail "ssh authentication failure is not fatal"
+                            test "$("$classify" 'Host key verification failed.')" = fatal ||
+                              fail "host key failure is not fatal"
+                            test "$("$classify" 'remote: Repository not found.')" = fatal ||
+                              fail "a missing repository is not fatal"
+                            test "$("$classify" 'ssh: Could not resolve hostname forge: Name or service not known')" = transient ||
+                              fail "a DNS failure is not transient"
+                            test "$("$classify" 'ssh: connect to host forge port 22: Connection timed out')" = transient ||
+                              fail "a timeout is not transient"
+                            test "$("$classify" 'Network is unreachable')" = transient ||
+                              fail "an unreachable network is not transient"
+                            test "$("$classify" "")" = transient || fail "an unknown message is not transient"
 
-              # ---- preflight against a forge that refuses ----------------------
-              # `set -e` first, exactly as NixOS wraps a `preStart`: without it the
-              # test cannot see the failure mode it is here for (a bare `git
-              # ls-remote` aborting the script before the classification runs).
-              {
-                echo "set -e"
-                sed -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
-                    -e "s#/var/lib/ci/ci.lock#$PWD/work/ci.lock#g" \
-                    -e "s#/nix/store/[^ ]*-git-minimal[^/]*/bin/git#$gitStub#g" \
-                    "$preflightPath"
-              } > work/preflight.sh
-              chmod +x work/preflight.sh
-              grep -q "$gitStub" work/preflight.sh || fail "the git stub was not substituted"
+                            # ---- preflight against a forge that refuses ----------------------
+                            # `set -e` first, exactly as NixOS wraps a `preStart`: without it the
+                            # test cannot see the failure mode it is here for (a bare `git
+                            # ls-remote` aborting the script before the classification runs).
+                            {
+                              echo "set -e"
+                              sed -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
+                                  -e "s#/var/lib/ci/ci.lock#$PWD/work/ci.lock#g" \
+                                  -e "s#/nix/store/[^ ]*-git-minimal[^/]*/bin/git#$gitStub#g" \
+                                  "$preflightPath"
+                            } > work/preflight.sh
+                            chmod +x work/preflight.sh
+                            grep -q "$gitStub" work/preflight.sh || fail "the git stub was not substituted"
 
-              reset_state() { rm -f work/state/skip work/state/failed work/state/rev; : > work/ci.lock; }
+                            reset_state() { rm -f work/state/skip work/state/failed work/state/rev; : > work/ci.lock; }
 
-              # A network that is not there: skip, and the unit stays successful.
-              reset_state
-              export GIT_STUB_MESSAGE='ssh: Could not resolve hostname forge.invalid: Name or service not known'
-              if ! pout=$(./work/preflight.sh 2>&1); then
-                fail "a transient resolution failure failed the unit instead of skipping: $pout"
-              fi
-              test -e work/state/skip || fail "a transient resolution failure did not write the skip marker"
-              printf '%s\n' "$pout" | grep -q "skipped: cannot resolve refs/heads/main" ||
-                fail "a transient resolution failure was not reported as a skip: $pout"
+                            # A network that is not there: skip, and the unit stays successful.
+                            reset_state
+                            export GIT_STUB_MESSAGE='ssh: Could not resolve hostname forge.invalid: Name or service not known'
+                            if ! pout=$(./work/preflight.sh 2>&1); then
+                              fail "a transient resolution failure failed the unit instead of skipping: $pout"
+                            fi
+                            test -e work/state/skip || fail "a transient resolution failure did not write the skip marker"
+                            printf '%s\n' "$pout" | grep -q "skipped: cannot resolve refs/heads/main" ||
+                              fail "a transient resolution failure was not reported as a skip: $pout"
 
-              # A rejected key: fail, so a rotated deploy key is visible.
-              reset_state
-              export GIT_STUB_MESSAGE='git@forge.invalid: Permission denied (publickey).'
-              if pout=$(./work/preflight.sh 2>&1); then
-                fail "rejected credentials were not fatal: $pout"
-              fi
-              test -e work/state/failed || fail "rejected credentials did not write the failed marker"
-              printf '%s\n' "$pout" | grep -q "failed: rev=unknown cannot resolve refs/heads/main" ||
-                fail "rejected credentials were not reported as a failure: $pout"
-              unset GIT_STUB_MESSAGE
+                            # The real incident (2026-11-22): the verdict is on the first line, the
+                            # last line is git's advice. This used to be classified as transient and
+                            # skipped for two days.
+                            reset_state
+                            export GIT_STUB_MESSAGE='Host key verification failed.
+              fatal: Could not read from remote repository.
 
-              # ---- notice -------------------------------------------------------
-              # Point the notifier's absolute tool paths at the stubs, and its
-              # per-session runtime directory at the sandbox.
-              sed -e "s#/nix/store/[^ ]*-systemd[^/]*/bin/loginctl#$loginctlStub#g" \
-                  -e "s#/nix/store/[^ ]*-util-linux[^/]*/bin/runuser#$runuserStub#g" \
-                  -e "s#/nix/store/[^ ]*-util-linux[^/]*/bin/wall#$wallStub#g" \
-                  -e "s#/run/user#$PWD/work/run/user#g" \
-                  "$notify/bin/nixos-upgrade-notify" > work/notify.sh
-              chmod +x work/notify.sh
-              grep -q "$runuserStub" work/notify.sh || fail "the runuser stub was not substituted"
-              grep -q "$loginctlStub" work/notify.sh || fail "the loginctl stub was not substituted"
+              Please make sure you have the correct access rights
+              and the repository exists.'
+                            if pout=$(./work/preflight.sh 2>&1); then
+                              fail "a host-key failure hidden behind git's advice was not fatal: $pout"
+                            fi
+                            test -e work/state/failed || fail "a host-key failure did not write the failed marker"
 
-              # id uid user seat active type — a mix of graphical/inactive plus one
-              # active text session (a VT must not get a desktop notification).
-              {
-                echo "1 1000 alice seat0 yes wayland"
-                echo "2 1001 bob seat0 no wayland"
-                echo "3 1002 carol seat0 yes x11"
-                echo "4 1003 dave seat0 yes tty"
-              } > "$SESSIONS"
-              mkdir -p work/run/user/1000 work/run/user/1001 work/run/user/1002 work/run/user/1003
-              # The notifier requires a real unix socket, which is what systemd
-              # creates for a session; a plain file must not pass.
-              mksocket() { python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$1"; }
-              mksocket work/run/user/1000/bus
-              mksocket work/run/user/1002/bus
-              touch work/run/user/1001/bus
+                            # A rejected key: fail, so a rotated deploy key is visible.
+                            reset_state
+                            export GIT_STUB_MESSAGE='git@forge.invalid: Permission denied (publickey).'
+                            if pout=$(./work/preflight.sh 2>&1); then
+                              fail "rejected credentials were not fatal: $pout"
+                            fi
+                            test -e work/state/failed || fail "rejected credentials did not write the failed marker"
+                            printf '%s\n' "$pout" | grep -q "failed: rev=unknown cannot resolve refs/heads/main" ||
+                              fail "rejected credentials were not reported as a failure: $pout"
+                            unset GIT_STUB_MESSAGE
 
-              ./work/notify.sh "upgrade in 120s" || fail "the notifier exited non-zero with sessions present"
-              grep -q alice "$NOTIFY_LOG" || fail "no notice for the active wayland session"
-              grep -q carol "$NOTIFY_LOG" || fail "no notice for the active x11 session"
-              grep -q bob "$NOTIFY_LOG" && fail "notified an inactive session"
-              grep -q dave "$NOTIFY_LOG" && fail "notified a text session"
-              grep -q "upgrade in 120s" "$NOTIFY_LOG" || fail "the message did not reach the session"
-              # The stub logs its arguments, so a notice line starts with "-u".
-              notices=$(grep -c '^-u ' "$NOTIFY_LOG" || true)
-              test "$notices" -eq 2 || fail "expected exactly two graphical notices, got $notices"
+                            # ---- notice -------------------------------------------------------
+                            # Point the notifier's absolute tool paths at the stubs, and its
+                            # per-session runtime directory at the sandbox.
+                            sed -e "s#/nix/store/[^ ]*-systemd[^/]*/bin/loginctl#$loginctlStub#g" \
+                                -e "s#/nix/store/[^ ]*-util-linux[^/]*/bin/runuser#$runuserStub#g" \
+                                -e "s#/nix/store/[^ ]*-util-linux[^/]*/bin/wall#$wallStub#g" \
+                                -e "s#/run/user#$PWD/work/run/user#g" \
+                                "$notify/bin/nixos-upgrade-notify" > work/notify.sh
+                            chmod +x work/notify.sh
+                            grep -q "$runuserStub" work/notify.sh || fail "the runuser stub was not substituted"
+                            grep -q "$loginctlStub" work/notify.sh || fail "the loginctl stub was not substituted"
 
-              # A bus *socket* is required: a regular file (1001) and a missing
-              # one (1003) must both be skipped, and an inactive session (bob)
-              # never reaches the bus at all.
-              : > "$NOTIFY_LOG"
-              rm -f work/run/user/1000/bus
-              ./work/notify.sh "no bus" || fail "the notifier failed without a bus socket"
-              grep -q alice "$NOTIFY_LOG" && fail "notified a session without a bus socket"
-              grep -q bob "$NOTIFY_LOG" && fail "notified an inactive session"
+                            # id uid user seat active type — a mix of graphical/inactive plus one
+                            # active text session (a VT must not get a desktop notification).
+                            {
+                              echo "1 1000 alice seat0 yes wayland"
+                              echo "2 1001 bob seat0 no wayland"
+                              echo "3 1002 carol seat0 yes x11"
+                              echo "4 1003 dave seat0 yes tty"
+                            } > "$SESSIONS"
+                            mkdir -p work/run/user/1000 work/run/user/1001 work/run/user/1002 work/run/user/1003
+                            # The notifier requires a real unix socket, which is what systemd
+                            # creates for a session; a plain file must not pass.
+                            mksocket() { python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$1"; }
+                            mksocket work/run/user/1000/bus
+                            mksocket work/run/user/1002/bus
+                            touch work/run/user/1001/bus
 
-              # Nobody logged in: silence, not an error.
-              : > "$SESSIONS"
-              ./work/notify.sh "nobody home" || fail "the notifier failed when nobody is logged in"
+                            ./work/notify.sh "upgrade in 120s" || fail "the notifier exited non-zero with sessions present"
+                            grep -q alice "$NOTIFY_LOG" || fail "no notice for the active wayland session"
+                            grep -q carol "$NOTIFY_LOG" || fail "no notice for the active x11 session"
+                            grep -q bob "$NOTIFY_LOG" && fail "notified an inactive session"
+                            grep -q dave "$NOTIFY_LOG" && fail "notified a text session"
+                            grep -q "upgrade in 120s" "$NOTIFY_LOG" || fail "the message did not reach the session"
+                            # The stub logs its arguments, so a notice line starts with "-u".
+                            notices=$(grep -c '^-u ' "$NOTIFY_LOG" || true)
+                            test "$notices" -eq 2 || fail "expected exactly two graphical notices, got $notices"
 
-              # ---- reboot unit --------------------------------------------------
-              sed -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
-                  -e "s#/var/lib/ci/ci.lock#$PWD/work/ci.lock#g" \
-                  -e "s#/nix/store/[^ ]*-systemd[^/]*/bin/systemctl#$systemctlStub#g" \
-                  "$rebootScriptPath" > work/reboot.sh
-              sed -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
-                  -e "s#/nix/store/[^ ]*-systemd[^/]*/bin/systemctl#$systemctlStub#g" \
-                  "$pendingRebootScriptPath" > work/reboot-pending.sh
-              chmod +x work/reboot.sh work/reboot-pending.sh
-              grep -q "$systemctlStub" work/reboot.sh || fail "the systemctl stub was not substituted"
+                            # A bus *socket* is required: a regular file (1001) and a missing
+                            # one (1003) must both be skipped, and an inactive session (bob)
+                            # never reaches the bus at all.
+                            : > "$NOTIFY_LOG"
+                            rm -f work/run/user/1000/bus
+                            ./work/notify.sh "no bus" || fail "the notifier failed without a bus socket"
+                            grep -q alice "$NOTIFY_LOG" && fail "notified a session without a bus socket"
+                            grep -q bob "$NOTIFY_LOG" && fail "notified an inactive session"
 
-              # Debt present, lock free: the line must precede the reboot call.
-              echo "rev=deadbeefcafe" > work/state/reboot-pending
-              : > work/ci.lock
-              stdout=$(./work/reboot.sh)
-              printf '%s\n' "$stdout" | grep -q "nixos-upgrade-reboot: rebooting" ||
-                fail "no reboot line with debt present: $stdout"
-              grep -qx "systemctl reboot" "$REBOOT_LOG" || fail "the unit did not call systemctl reboot"
-              echo_line=$(grep -n "rebooting" work/reboot.sh | head -n 1 | cut -d: -f1)
-              reboot_line=$(grep -n "systemctl reboot" work/reboot.sh | head -n 1 | cut -d: -f1)
-              test "$echo_line" -lt "$reboot_line" ||
-                fail "the reboot line is logged after the reboot, so it would be lost"
+                            # Nobody logged in: silence, not an error.
+                            : > "$SESSIONS"
+                            ./work/notify.sh "nobody home" || fail "the notifier failed when nobody is logged in"
 
-              # Lock held by CI: skip, do not reboot.
-              : > "$REBOOT_LOG"
-              flock work/ci.lock -c 'sleep 30' &
-              holder=$!
-              sleep 1
-              stdout=$(./work/reboot.sh)
-              printf '%s\n' "$stdout" | grep -q "held by a CI job" || fail "no skip when CI holds the lock: $stdout"
-              test ! -s "$REBOOT_LOG" || fail "rebooted while CI held the lock"
-              kill "$holder" 2>/dev/null || true
-              wait "$holder" 2>/dev/null || true
+                            # ---- reboot unit --------------------------------------------------
+                            sed -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
+                                -e "s#/var/lib/ci/ci.lock#$PWD/work/ci.lock#g" \
+                                -e "s#/nix/store/[^ ]*-systemd[^/]*/bin/systemctl#$systemctlStub#g" \
+                                "$rebootScriptPath" > work/reboot.sh
+                            sed -e "s#/run/nixos-upgrade#$PWD/work/state#g" \
+                                -e "s#/nix/store/[^ ]*-systemd[^/]*/bin/systemctl#$systemctlStub#g" \
+                                "$pendingRebootScriptPath" > work/reboot-pending.sh
+                            chmod +x work/reboot.sh work/reboot-pending.sh
+                            grep -q "$systemctlStub" work/reboot.sh || fail "the systemctl stub was not substituted"
 
-              # onlyWhenPending = true and no debt: skip.
-              rm -f work/state/reboot-pending
-              stdout=$(./work/reboot-pending.sh)
-              printf '%s\n' "$stdout" | grep -q "no pending kernel/initrd change" ||
-                fail "the default policy reboots without debt: $stdout"
+                            # Debt present, lock free: the line must precede the reboot call.
+                            echo "rev=deadbeefcafe" > work/state/reboot-pending
+                            : > work/ci.lock
+                            stdout=$(./work/reboot.sh)
+                            printf '%s\n' "$stdout" | grep -q "nixos-upgrade-reboot: rebooting" ||
+                              fail "no reboot line with debt present: $stdout"
+                            grep -qx "systemctl reboot" "$REBOOT_LOG" || fail "the unit did not call systemctl reboot"
+                            echo_line=$(grep -n "rebooting" work/reboot.sh | head -n 1 | cut -d: -f1)
+                            reboot_line=$(grep -n "systemctl reboot" work/reboot.sh | head -n 1 | cut -d: -f1)
+                            test "$echo_line" -lt "$reboot_line" ||
+                              fail "the reboot line is logged after the reboot, so it would be lost"
 
-              # ---- rendered credential -----------------------------------------
-              printf '%s' "$sshConfig" > work/ssh_config
-              printf '%s' "$sshKnownHosts" > work/ssh_known_hosts
-              grep -q "Host forge.invalid" work/ssh_config || fail "ssh_config lost the Host block"
-              grep -q "IdentitiesOnly yes" work/ssh_config || fail "ssh_config lost IdentitiesOnly"
-              grep -q "forge.invalid " work/ssh_known_hosts || fail "the pinned host key is missing"
+                            # Lock held by CI: skip, do not reboot.
+                            : > "$REBOOT_LOG"
+                            flock work/ci.lock -c 'sleep 30' &
+                            holder=$!
+                            sleep 1
+                            stdout=$(./work/reboot.sh)
+                            printf '%s\n' "$stdout" | grep -q "held by a CI job" || fail "no skip when CI holds the lock: $stdout"
+                            test ! -s "$REBOOT_LOG" || fail "rebooted while CI held the lock"
+                            kill "$holder" 2>/dev/null || true
+                            wait "$holder" 2>/dev/null || true
 
-              echo "✓ auto-upgrade: gates, notice, reboot policy, credential and outcome lines behave as specified"
-              touch $out
+                            # onlyWhenPending = true and no debt: skip.
+                            rm -f work/state/reboot-pending
+                            stdout=$(./work/reboot-pending.sh)
+                            printf '%s\n' "$stdout" | grep -q "no pending kernel/initrd change" ||
+                              fail "the default policy reboots without debt: $stdout"
+
+                            # ---- rendered credential -----------------------------------------
+                            printf '%s' "$sshConfig" > work/ssh_config
+                            printf '%s' "$sshKnownHosts" > work/ssh_known_hosts
+                            grep -q "Host forge-alias" work/ssh_config || fail "ssh_config lost the Host block"
+                            grep -q "HostName forge.invalid" work/ssh_config || fail "ssh_config lost the HostName"
+                            grep -q "IdentitiesOnly yes" work/ssh_config || fail "ssh_config lost IdentitiesOnly"
+                            grep -q "forge-alias,forge.invalid " work/ssh_known_hosts ||
+                              fail "the pinned host key does not cover both names"
+
+                            echo "✓ auto-upgrade: gates, notice, reboot policy, credential and outcome lines behave as specified"
+                            touch $out
             ''
           );
     };

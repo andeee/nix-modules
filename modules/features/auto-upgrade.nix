@@ -55,6 +55,7 @@ _:
       # `lib.getExe*` keeps them correct when a package moves a binary.
       inherit (pkgs) coreutils;
 
+      cat = lib.getExe' coreutils "cat";
       cut = lib.getExe' coreutils "cut";
       head = lib.getExe' coreutils "head";
       tail = lib.getExe' coreutils "tail";
@@ -297,6 +298,20 @@ _:
                     The forge's pinned ssh host key. Verification stays ON; this is
                     a pin, not a substitute for it. Take the fingerprint from an
                     out-of-band source.
+                  '';
+                };
+
+                hostName = lib.mkOption {
+                  type = lib.types.nullOr lib.types.str;
+                  default = null;
+                  example = "forge.example";
+                  description = ''
+                    The real hostname behind `host`, if `host` is a private alias.
+                    The module then renders `HostName` and pins the key under *both*
+                    names — which is not cosmetic: ssh looks the host key up under the
+                    name it actually connects to, i.e. after `HostName` substitution.
+                    A pin only under the alias therefore fails with "Host key
+                    verification failed", which is what this fleet hit on 2026-11-22.
                   '';
                 };
 
@@ -565,7 +580,11 @@ _:
               rev="$(${head} -n 1 "$state/lsremote.out" | ${cut} -f1)"
 
               if [ "$status" -ne 0 ] || [ -z "$rev" ]; then
-                reason="$(${tail} -n 1 "$state/lsremote.err" 2>/dev/null || true)"
+                # The whole message, not its last line: git puts the verdict in the
+                # first line ("Permission denied", "Host key verification failed") and
+                # ends with advice ("and the repository exists"), so a tail-based
+                # classification shrugs at exactly the failures that need a human.
+                reason="$(${cat} "$state/lsremote.err" 2>/dev/null || true)"
                 reason="''${reason:-unknown error}"
 
                 # Credential and repository problems are a human's business (a
@@ -677,12 +696,17 @@ _:
             # root's other keys from being offered instead.
             extraConfig = ''
               Host ${cfg.fetch.host}
+              ${lib.optionalString (cfg.fetch.hostName != null) "  HostName ${cfg.fetch.hostName}"}
                 IdentityFile ${cfg.fetch.identityFile}
                 IdentitiesOnly yes
             '';
 
+            # Both names, deliberately: the alias is what `repoUrl` asks for, and the
+            # real hostname is what ssh validates the key against once `HostName` has
+            # been applied. A pin under the alias alone fails with "Host key
+            # verification failed" — measured 2026-11-22.
             knownHosts.${cfg.fetch.knownHostsName} = {
-              hostNames = [ cfg.fetch.host ];
+              hostNames = [ cfg.fetch.host ] ++ lib.optional (cfg.fetch.hostName != null) cfg.fetch.hostName;
               publicKey = cfg.fetch.hostPublicKey;
             };
           };
