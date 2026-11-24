@@ -22,6 +22,19 @@ in
           description = "rbw login email; required when custom.desktop.rbw.enable.";
         };
       };
+      passwordLauncher = {
+        package = lib.mkOption {
+          type = lib.types.nullOr lib.types.package;
+          default = pkgs.rofi-rbw;
+          defaultText = lib.literalExpression "pkgs.rofi-rbw";
+          description = "Password launcher to install; null installs none.";
+        };
+        command = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = "rofi-rbw";
+          description = "Command bound to Mod+P; null leaves Mod+P unbound.";
+        };
+      };
       gpgPublicKeys = lib.mkOption {
         type = lib.types.listOf lib.types.attrs;
         default = [ ];

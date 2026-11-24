@@ -23,8 +23,11 @@ _:
           ${xargs} -I{} ${niri} msg action focus-window --id {} && ${niri} msg unset-window-urgent --id {}
       '';
       neru = lib.getExe osConfig.services.neru.package;
+      launcher = config.custom.desktop.passwordLauncher;
     in
     {
+      # custom.desktop.passwordLauncher is declared in desktop.nix; this module
+      # has no `config` wrapper, so it cannot declare options itself.
       imports = [
         inputs.wayland-pipewire-idle-inhibit.homeModules.default
         inputs.dankMaterialShell.homeModules.dank-material-shell
@@ -32,11 +35,10 @@ _:
       ];
       home.packages = with pkgs; [
         wtype
-        rofi-rbw
         xwayland-satellite-stable
         nautilus
         satty
-      ];
+      ] ++ lib.optional (launcher.package != null) launcher.package;
 
       programs = {
         niri = {
@@ -249,7 +251,7 @@ _:
                 "Mod+Shift+E".action = dms-ipc "powermenu" "open";
                 "Ctrl+Alt+Delete".action = quit;
 
-                "Mod+P".action = spawn "rofi-rbw";
+                "Mod+P" = lib.mkIf (launcher.command != null) { action = spawn launcher.command; };
 
                 "Mod+Shift+S".action = dms-ipc "niri" "screenshot";
                 "Mod+Shift+V".action = dms-ipc "clipboard" "toggle";
