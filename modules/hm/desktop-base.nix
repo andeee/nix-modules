@@ -314,6 +314,7 @@ _:
           settings = {
             main = {
               term = "xterm-256color";
+              selection-target = "both";
             };
             scrollback = {
               lines = 10000;
